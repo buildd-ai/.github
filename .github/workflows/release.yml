@@ -33,6 +33,10 @@ on:
         required: false
         type: boolean
         default: false
+    secrets:
+      RELEASE_APP_PRIVATE_KEY:
+        description: 'Private key for a release GitHub App (optional). With vars.RELEASE_APP_ID set, the release PR + bump push are App-authored so CI runs without a manual "approve and run". Omit to keep github.token behaviour.'
+        required: false
 
 permissions:
   contents: write
@@ -42,10 +46,26 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      # Optional: mint a GitHub App token so the release PR + version-bump push are
+      # App-authored. A GITHUB_TOKEN-authored PR has its CI gated behind a manual
+      # "approve and run"; an App-authored one runs CI automatically. Requires
+      # vars.RELEASE_APP_ID + secrets.RELEASE_APP_PRIVATE_KEY in the caller. If either
+      # is absent (or the step errors), token output is empty and every consumer below
+      # falls back to github.token — i.e. exactly the previous behaviour.
+      - name: Mint release App token
+        id: app-token
+        if: vars.RELEASE_APP_ID != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v4
         with:
           ref: dev
           fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token || github.token }}
 
       - name: Configure git
         run: |
@@ -79,6 +99,6 @@ jobs:
       - name: Run release script
         if: steps.shippable.outputs.shippable == 'true' || inputs.force == true
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           PACKAGE_FILES: ${{ inputs.package_files }}
         run: bash /tmp/release.sh
